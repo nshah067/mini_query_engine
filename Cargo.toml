@@ -1,0 +1,11 @@
+[package]
+name = "mini_query_engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrow = "50.0"
+parquet = "50.0"
+rayon = "1.8"
+
+[dev-dependencies]
