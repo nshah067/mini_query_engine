@@ -4,6 +4,7 @@ use crate::execution::batch::{RecordBatch, SchemaRef};
 use crate::execution::operators::Operator;
 use crate::planner::logical_plan::{BinaryOp, LogicalExpr, LogicalValue};
 use arrow::array::{ArrayRef, BooleanArray};
+use arrow_ord::comparison::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use std::sync::Arc;
 
 /// Filter operator that applies a predicate expression to filter rows
@@ -51,32 +52,20 @@ impl FilterOperator {
                 let left_array = self.evaluate_to_array(batch, left)?;
                 let right_array = self.evaluate_to_array(batch, right)?;
 
-                // Apply binary operation using Arrow's vectorized compute kernels
+                // Apply binary operation using Arrow's vectorized compute (eq_dyn works with &dyn Array)
                 match op {
-                    BinaryOp::Eq => {
-                        arrow::compute::eq(&left_array, &right_array)
-                            .map_err(|e| format!("Failed to evaluate equality: {}", e))
-                    }
-                    BinaryOp::Neq => {
-                        arrow::compute::neq(&left_array, &right_array)
-                            .map_err(|e| format!("Failed to evaluate inequality: {}", e))
-                    }
-                    BinaryOp::Lt => {
-                        arrow::compute::lt(&left_array, &right_array)
-                            .map_err(|e| format!("Failed to evaluate less than: {}", e))
-                    }
-                    BinaryOp::Le => {
-                        arrow::compute::lt_eq(&left_array, &right_array)
-                            .map_err(|e| format!("Failed to evaluate less than or equal: {}", e))
-                    }
-                    BinaryOp::Gt => {
-                        arrow::compute::gt(&left_array, &right_array)
-                            .map_err(|e| format!("Failed to evaluate greater than: {}", e))
-                    }
-                    BinaryOp::Ge => {
-                        arrow::compute::gt_eq(&left_array, &right_array)
-                            .map_err(|e| format!("Failed to evaluate greater than or equal: {}", e))
-                    }
+                    BinaryOp::Eq => eq_dyn(left_array.as_ref(), right_array.as_ref())
+                        .map_err(|e| format!("Failed to evaluate equality: {}", e)),
+                    BinaryOp::Neq => neq_dyn(left_array.as_ref(), right_array.as_ref())
+                        .map_err(|e| format!("Failed to evaluate inequality: {}", e)),
+                    BinaryOp::Lt => lt_dyn(left_array.as_ref(), right_array.as_ref())
+                        .map_err(|e| format!("Failed to evaluate less than: {}", e)),
+                    BinaryOp::Le => lt_eq_dyn(left_array.as_ref(), right_array.as_ref())
+                        .map_err(|e| format!("Failed to evaluate less than or equal: {}", e)),
+                    BinaryOp::Gt => gt_dyn(left_array.as_ref(), right_array.as_ref())
+                        .map_err(|e| format!("Failed to evaluate greater than: {}", e)),
+                    BinaryOp::Ge => gt_eq_dyn(left_array.as_ref(), right_array.as_ref())
+                        .map_err(|e| format!("Failed to evaluate greater than or equal: {}", e)),
                     BinaryOp::And => {
                         let left_bool = self.as_boolean_array(&left_array)?;
                         let right_bool = self.as_boolean_array(&right_array)?;
@@ -90,6 +79,12 @@ impl FilterOperator {
                             .map_err(|e| format!("Failed to evaluate OR: {}", e))
                     }
                 }
+            }
+            LogicalExpr::Literal(LogicalValue::Int32(_))
+            | LogicalExpr::Literal(LogicalValue::Int64(_))
+            | LogicalExpr::Literal(LogicalValue::Float64(_))
+            | LogicalExpr::Literal(LogicalValue::String(_)) => {
+                Err("Non-boolean literal cannot be used as predicate".to_string())
             }
         }
     }
@@ -136,7 +131,7 @@ impl FilterOperator {
     }
 
     /// Convert an array to a boolean array reference
-    fn as_boolean_array(&self, array: &ArrayRef) -> Result<&BooleanArray, String> {
+    fn as_boolean_array<'a>(&self, array: &'a ArrayRef) -> Result<&'a BooleanArray, String> {
         array
             .as_any()
             .downcast_ref::<BooleanArray>()

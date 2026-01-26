@@ -6,9 +6,12 @@ pub mod scan;
 pub mod sort;
 
 // Export operators for use by executor
+pub use aggregate::AggregateOperator;
 pub use filter::FilterOperator;
+pub use join::HashJoinOperator;
 pub use project::ProjectOperator;
 pub use scan::ScanOperator;
+pub use sort::SortOperator;
 
 use crate::execution::batch::{RecordBatch, SchemaRef};
 use std::sync::Arc;

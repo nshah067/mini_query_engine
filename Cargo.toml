@@ -5,7 +5,11 @@ edition = "2021"
 
 [dependencies]
 arrow = "50.0"
+arrow-ord = "50.0"
+arrow-select = "50.0"
 parquet = "50.0"
 rayon = "1.8"
+# Pin chrono to avoid arrow-arith/chrono quarter() conflict (arrow-rs#7196)
+chrono = "=0.4.39"
 
 [dev-dependencies]

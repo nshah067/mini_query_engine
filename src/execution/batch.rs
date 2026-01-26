@@ -216,8 +216,10 @@ impl RecordBatch {
                 .map(|batch| batch.columns[col_idx].clone())
                 .collect();
 
-            // Use Arrow's concat to combine arrays
-            let concatenated = arrow::compute::concat(&column_arrays)
+            // Use Arrow's concat: it expects &[&dyn Array]
+            let refs: Vec<&dyn arrow::array::Array> =
+                column_arrays.iter().map(|a| a.as_ref()).collect();
+            let concatenated = arrow::compute::concat(&refs)
                 .map_err(|e| format!("Failed to concatenate column {}: {}", col_idx, e))?;
 
             concatenated_columns.push(concatenated);

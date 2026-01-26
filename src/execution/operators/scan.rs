@@ -27,12 +27,25 @@ impl ScanOperator {
     /// Result containing the ScanOperator, or an error string
     pub fn new<P: AsRef<Path>>(path: P, projection: Option<Vec<String>>) -> Result<Self, String> {
         // Read schema first to validate the file
-        let mut reader = ParquetReader::from_path(&path)
+        let reader = ParquetReader::from_path(&path)
             .map_err(|e| format!("Failed to open Parquet file: {}", e))?;
-        
+
         let arrow_schema = reader.schema()
             .map_err(|e| format!("Failed to read Parquet schema: {}", e))?;
-        
+
+        // Determine column indices for projection (before we might move arrow_schema)
+        let column_indices = projection.as_ref().map(|columns| {
+            columns
+                .iter()
+                .filter_map(|name| {
+                    arrow_schema
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == name)
+                })
+                .collect::<Vec<_>>()
+        });
+
         // If projection is specified, create a projected schema (prune the columns)
         let schema = if let Some(ref columns) = projection {
             let fields: Vec<_> = columns
@@ -43,26 +56,13 @@ impl ScanOperator {
                         .iter()
                         .find(|f| f.name() == name)
                         .ok_or_else(|| format!("Column '{}' not found in schema", name))
-                        .map(|f| f.clone())
+                        .map(|f| f.as_ref().clone())
                 })
                 .collect::<Result<_, _>>()?;
             Arc::new(Schema::new(fields))
         } else {
             Arc::new(arrow_schema)
         };
-
-        // Determine column indices for projection if needed
-        let column_indices = projection.as_ref().map(|columns| {
-            columns
-                .iter()
-                .filter_map(|name| {
-                    arrow_schema
-                        .fields()
-                        .iter()
-                        .position(|f| f.name() == name)
-                })
-                .collect()
-        });
 
         let config = ParquetReaderConfig {
             parallel: true,
@@ -81,7 +81,7 @@ impl ScanOperator {
     /// Read all data from the Parquet file
     /// This is the main execution method for Scan
     pub fn read_all(&self) -> Result<Vec<RecordBatch>, String> {
-        let mut reader = ParquetReader::from_path_with_config(&self.path, self.config.clone())
+        let reader = ParquetReader::from_path_with_config(&self.path, self.config.clone())
             .map_err(|e| format!("Failed to create Parquet reader: {}", e))?;
         
         let arrow_batches = reader.read_all()

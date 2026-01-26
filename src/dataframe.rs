@@ -3,14 +3,37 @@
 use std::path::Path;
 
 use crate::execution::batch::RecordBatch;
-use crate::planner::logical_plan::{BinaryOp, LogicalExpr, LogicalPlan, LogicalValue};
-use crate::storage::parquet_reader;
+use crate::execution::Executor;
+use crate::planner::logical_plan::{
+    Aggregation, AggregateFunction, BinaryOp, JoinType, LogicalExpr, LogicalPlan, LogicalValue,
+    OrderByExpr,
+};
 
 /// DataFrame represents a lazy query plan that can be executed
 /// Operations on DataFrame build up a logical plan tree
 #[derive(Debug, Clone)]
 pub struct DataFrame {
     plan: LogicalPlan,
+}
+
+/// Intermediate type for group_by + agg. Call .agg(aggregations) to complete.
+#[derive(Debug, Clone)]
+pub struct GroupedDataFrame {
+    input: LogicalPlan,
+    group_by: Vec<String>,
+}
+
+impl GroupedDataFrame {
+    /// Apply aggregations and return a DataFrame
+    pub fn agg(self, aggs: Vec<Aggregation>) -> DataFrame {
+        DataFrame {
+            plan: LogicalPlan::Aggregate {
+                input: Box::new(self.input),
+                group_by: self.group_by,
+                aggs,
+            },
+        }
+    }
 }
 
 impl DataFrame {
@@ -67,264 +90,102 @@ impl DataFrame {
         }
     }
 
+    /// Group by the given columns. Returns a GroupedDataFrame; call .agg(aggregations) to complete.
+    pub fn group_by(&self, columns: Vec<String>) -> GroupedDataFrame {
+        GroupedDataFrame {
+            input: self.plan.clone(),
+            group_by: columns,
+        }
+    }
+
+    /// Order by the given expressions. Use `asc("col")` and `desc("col")` to build OrderByExpr.
+    pub fn order_by(&self, order_by: Vec<OrderByExpr>) -> Self {
+        DataFrame {
+            plan: LogicalPlan::Sort {
+                input: Box::new(self.plan.clone()),
+                order_by,
+            },
+        }
+    }
+
     /// Execute the query plan and return the results as a vector of RecordBatches
     /// 
     /// # Returns
     /// Vector of RecordBatches containing the query results
     pub fn collect(&self) -> Result<Vec<RecordBatch>, String> {
-        execute_plan(&self.plan)
+        Executor::new().execute(&self.plan)
     }
 }
 
-// Helper function to execute a logical plan
-fn execute_plan(plan: &LogicalPlan) -> Result<Vec<RecordBatch>, String> {
-    match plan {
-        LogicalPlan::Scan { path, projection, filters } => {
-            // Read from Parquet file
-            let mut reader = parquet_reader::ParquetReader::from_path(path)
-                .map_err(|e| format!("Failed to read Parquet file: {}", e))?;
-            
-            let arrow_batches = reader.read_all()
-                .map_err(|e| format!("Failed to read all data: {}", e))?;
-
-            // Convert Arrow RecordBatches to our RecordBatch type
-            let batches: Vec<RecordBatch> = arrow_batches
-                .into_iter()
-                .map(RecordBatch::from_arrow)
-                .collect();
-
-            // Apply column projection if specified
-            let batches = if let Some(columns) = projection {
-                let indices: Result<Vec<usize>, String> = batches
-                    .first()
-                    .ok_or("No batches to project")?
-                    .schema()
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, field)| {
-                        if columns.contains(&field.name().to_string()) {
-                            Some(Ok(idx))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let indices = indices?;
-                batches
-                    .into_iter()
-                    .map(|batch| batch.select_columns(&indices))
-                    .collect::<Result<Vec<_>, _>>()?
-            } else {
-                batches
-            };
-
-            // Apply filters if specified
-            // For now, filters will be applied during execution
-            // This is a simplified implementation
-            if !filters.is_empty() {
-                // Filters will be applied by Filter operators in the plan
-                // For Scan-level filters, we could push them down here
-            }
-
-            Ok(batches)
-        }
-        LogicalPlan::Project { input, columns } => {
-            // Execute input first
-            let input_batches = execute_plan(input)?;
-
-            // Get column indices
-            let indices: Vec<usize> = input_batches
-                .first()
-                .ok_or("No batches to project")?
-                .schema()
-                .fields()
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, field)| {
-                    if columns.contains(&field.name().to_string()) {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if indices.len() != columns.len() {
-                return Err(format!(
-                    "Some columns not found. Requested: {:?}, Found: {:?}",
-                    columns,
-                    input_batches[0]
-                        .schema()
-                        .fields()
-                        .iter()
-                        .map(|f| f.name().to_string())
-                        .collect::<Vec<_>>()
-                ));
-            }
-
-            // Apply projection to each batch
-            let projected_batches: Result<Vec<RecordBatch>, String> = input_batches
-                .into_iter()
-                .map(|batch| batch.select_columns(&indices))
-                .collect();
-
-            projected_batches
-        }
-        LogicalPlan::Filter { input, predicate } => {
-            // Execute input first
-            let input_batches = execute_plan(input)?;
-
-            // Apply filter to each batch
-            let filtered_batches: Result<Vec<RecordBatch>, String> = input_batches
-                .into_iter()
-                .map(|batch| apply_filter(&batch, predicate))
-                .collect();
-
-            // Filter out empty batches
-            let filtered_batches: Vec<RecordBatch> = filtered_batches?
-                .into_iter()
-                .filter(|b| !b.is_empty())
-                .collect();
-
-            Ok(filtered_batches)
-        }
+// Aggregation helper constructors for use with group_by().agg([...])
+/// COUNT(*) - count all rows in each group
+pub fn count(alias: &str) -> Aggregation {
+    Aggregation {
+        function: AggregateFunction::Count,
+        column: None,
+        alias: alias.to_string(),
     }
 }
 
-// Helper function to apply a filter expression to a RecordBatch
-fn apply_filter(batch: &RecordBatch, predicate: &LogicalExpr) -> Result<RecordBatch, String> {
-    // Evaluate the predicate to get a boolean array
-    let boolean_array = evaluate_expr(batch, predicate)?;
-
-    // Use Arrow's filter function to apply the boolean mask
-    let filtered_columns: Vec<arrow::array::ArrayRef> = batch
-        .columns()
-        .iter()
-        .map(|col| {
-            arrow::compute::filter(col, &boolean_array)
-                .map_err(|e| format!("Failed to filter column: {}", e))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let num_rows = filtered_columns.first().map(|c| c.len()).unwrap_or(0);
-    RecordBatch::try_new(batch.schema().clone(), filtered_columns)
-}
-
-// Helper function to evaluate a logical expression against a RecordBatch
-fn evaluate_expr(
-    batch: &RecordBatch,
-    expr: &LogicalExpr,
-) -> Result<arrow::array::BooleanArray, String> {
-    match expr {
-        LogicalExpr::Column(name) => {
-            // For now, we can't evaluate a column as a boolean without a comparison
-            // This is a limitation - in a full implementation, we'd handle this differently
-            Err(format!(
-                "Cannot evaluate column '{}' as boolean expression",
-                name
-            ))
-        }
-        LogicalExpr::Literal(LogicalValue::Boolean(value)) => {
-            // Create a boolean array with all values set to the literal
-            let len = batch.num_rows();
-            Ok(arrow::array::BooleanArray::from(vec![*value; len]))
-        }
-        LogicalExpr::BinaryExpr { left, op, right } => {
-            // Evaluate left and right sides
-            let left_array = evaluate_to_array(batch, left)?;
-            let right_array = evaluate_to_array(batch, right)?;
-
-            // Apply binary operation
-            match op {
-                BinaryOp::Eq => {
-                    arrow::compute::eq(&left_array, &right_array)
-                        .map_err(|e| format!("Failed to evaluate equality: {}", e))
-                }
-                BinaryOp::Neq => {
-                    arrow::compute::neq(&left_array, &right_array)
-                        .map_err(|e| format!("Failed to evaluate inequality: {}", e))
-                }
-                BinaryOp::Lt => {
-                    arrow::compute::lt(&left_array, &right_array)
-                        .map_err(|e| format!("Failed to evaluate less than: {}", e))
-                }
-                BinaryOp::Le => {
-                    arrow::compute::lt_eq(&left_array, &right_array)
-                        .map_err(|e| format!("Failed to evaluate less than or equal: {}", e))
-                }
-                BinaryOp::Gt => {
-                    arrow::compute::gt(&left_array, &right_array)
-                        .map_err(|e| format!("Failed to evaluate greater than: {}", e))
-                }
-                BinaryOp::Ge => {
-                    arrow::compute::gt_eq(&left_array, &right_array)
-                        .map_err(|e| format!("Failed to evaluate greater than or equal: {}", e))
-                }
-                BinaryOp::And => {
-                    let left_bool = as_boolean_array(&left_array)?;
-                    let right_bool = as_boolean_array(&right_array)?;
-                    arrow::compute::and(&left_bool, &right_bool)
-                        .map_err(|e| format!("Failed to evaluate AND: {}", e))
-                }
-                BinaryOp::Or => {
-                    let left_bool = as_boolean_array(&left_array)?;
-                    let right_bool = as_boolean_array(&right_array)?;
-                    arrow::compute::or(&left_bool, &right_bool)
-                        .map_err(|e| format!("Failed to evaluate OR: {}", e))
-                }
-            }
-        }
-        _ => Err(format!("Unsupported expression type: {:?}", expr)),
+/// COUNT(column) - count non-null values in the column
+pub fn count_column(column: &str, alias: &str) -> Aggregation {
+    Aggregation {
+        function: AggregateFunction::Count,
+        column: Some(column.to_string()),
+        alias: alias.to_string(),
     }
 }
 
-// Helper to evaluate an expression to an Arrow array
-fn evaluate_to_array(
-    batch: &RecordBatch,
-    expr: &LogicalExpr,
-) -> Result<arrow::array::ArrayRef, String> {
-    match expr {
-        LogicalExpr::Column(name) => {
-            batch
-                .column_by_name(name)
-                .ok_or_else(|| format!("Column '{}' not found", name))
-                .map(|col| col.clone())
-        }
-        LogicalExpr::Literal(value) => {
-            let len = batch.num_rows();
-            match value {
-                LogicalValue::Int32(v) => {
-                    Ok(Arc::new(arrow::array::Int32Array::from(vec![*v; len])))
-                }
-                LogicalValue::Int64(v) => {
-                    Ok(Arc::new(arrow::array::Int64Array::from(vec![*v; len])))
-                }
-                LogicalValue::Float64(v) => {
-                    Ok(Arc::new(arrow::array::Float64Array::from(vec![*v; len])))
-                }
-                LogicalValue::String(v) => {
-                    Ok(Arc::new(arrow::array::StringArray::from(vec![v.as_str(); len])))
-                }
-                LogicalValue::Boolean(v) => {
-                    Ok(Arc::new(arrow::array::BooleanArray::from(vec![*v; len])))
-                }
-            }
-        }
-        LogicalExpr::BinaryExpr { .. } => {
-            // For binary expressions, we evaluate them to boolean first, then convert
-            let bool_array = evaluate_expr(batch, expr)?;
-            Ok(Arc::new(bool_array))
-        }
+/// SUM(column)
+pub fn sum(column: &str, alias: &str) -> Aggregation {
+    Aggregation {
+        function: AggregateFunction::Sum,
+        column: Some(column.to_string()),
+        alias: alias.to_string(),
     }
 }
 
-// Helper to convert an array to a boolean array
-fn as_boolean_array(array: &arrow::array::ArrayRef) -> Result<&arrow::array::BooleanArray, String> {
-    array
-        .as_any()
-        .downcast_ref::<arrow::array::BooleanArray>()
-        .ok_or_else(|| "Array is not a boolean array".to_string())
+/// AVG(column)
+pub fn avg(column: &str, alias: &str) -> Aggregation {
+    Aggregation {
+        function: AggregateFunction::Avg,
+        column: Some(column.to_string()),
+        alias: alias.to_string(),
+    }
+}
+
+/// MIN(column)
+pub fn min(column: &str, alias: &str) -> Aggregation {
+    Aggregation {
+        function: AggregateFunction::Min,
+        column: Some(column.to_string()),
+        alias: alias.to_string(),
+    }
+}
+
+/// MAX(column)
+pub fn max(column: &str, alias: &str) -> Aggregation {
+    Aggregation {
+        function: AggregateFunction::Max,
+        column: Some(column.to_string()),
+        alias: alias.to_string(),
+    }
+}
+
+/// ORDER BY ascending
+pub fn asc(column: &str) -> OrderByExpr {
+    OrderByExpr {
+        column: column.to_string(),
+        ascending: true,
+    }
+}
+
+/// ORDER BY descending
+pub fn desc(column: &str) -> OrderByExpr {
+    OrderByExpr {
+        column: column.to_string(),
+        ascending: false,
+    }
 }
 
 // Helper functions for building expressions more easily

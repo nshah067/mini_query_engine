@@ -43,6 +43,24 @@ pub enum LogicalValue {
     Boolean(bool),
 }
 
+/// Aggregate function for GROUP BY aggregations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregateFunction {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+/// An aggregation expression: function, optional column (None for Count(*)), and output alias
+#[derive(Debug, Clone)]
+pub struct Aggregation {
+    pub function: AggregateFunction,
+    pub column: Option<String>,
+    pub alias: String,
+}
+
 /// Logical query plan representing a query as a tree of operations
 #[derive(Debug, Clone)]
 pub enum LogicalPlan {
@@ -62,6 +80,38 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         predicate: LogicalExpr,
     },
+    /// Aggregate with GROUP BY
+    Aggregate {
+        input: Box<LogicalPlan>,
+        group_by: Vec<String>,
+        aggs: Vec<Aggregation>,
+    },
+    /// ORDER BY
+    Sort {
+        input: Box<LogicalPlan>,
+        order_by: Vec<OrderByExpr>,
+    },
+    /// Join two plans
+    Join {
+        left: Box<LogicalPlan>,
+        right: Box<LogicalPlan>,
+        join_type: JoinType,
+        on: (String, String), // (left_key, right_key)
+    },
+}
+
+/// Join type: Inner or Left (outer)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinType {
+    Inner,
+    Left,
+}
+
+/// Expression for ORDER BY: column name and direction
+#[derive(Debug, Clone)]
+pub struct OrderByExpr {
+    pub column: String,
+    pub ascending: bool,
 }
 
 impl LogicalPlan {
@@ -91,6 +141,17 @@ impl LogicalPlan {
             LogicalPlan::Filter { input, .. } => {
                 // Filter doesn't change schema
                 input.schema()
+            }
+            LogicalPlan::Aggregate { .. } => {
+                // Schema is computed during execution based on group_by + aggs
+                Err("Schema not available for Aggregate without execution".to_string())
+            }
+            LogicalPlan::Sort { input, .. } => {
+                // Sort doesn't change schema
+                input.schema()
+            }
+            LogicalPlan::Join { .. } => {
+                Err("Schema not available for Join without execution".to_string())
             }
         }
     }

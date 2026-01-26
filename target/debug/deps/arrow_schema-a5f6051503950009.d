@@ -1,0 +1,10 @@
+/Users/nshah/Documents/GitHub/mini_query_engine/target/debug/deps/arrow_schema-a5f6051503950009.d: /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/lib.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/datatype.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/error.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/field.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/fields.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/schema.rs
+
+/Users/nshah/Documents/GitHub/mini_query_engine/target/debug/deps/libarrow_schema-a5f6051503950009.rmeta: /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/lib.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/datatype.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/error.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/field.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/fields.rs /Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/schema.rs
+
+/Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/lib.rs:
+/Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/datatype.rs:
+/Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/error.rs:
+/Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/field.rs:
+/Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/fields.rs:
+/Users/nshah/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/arrow-schema-50.0.0/src/schema.rs:
